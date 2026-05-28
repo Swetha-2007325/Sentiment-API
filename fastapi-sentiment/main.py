@@ -140,8 +140,6 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Serve files from the static/ folder at /static
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Configure Jinja2 to load templates from the templates/ folder
-templates = Jinja2Templates(directory="templates")
 
 
 # ─── Pydantic models ───────────────────────────────────────────────────────────
@@ -158,9 +156,9 @@ class PredictResponse(BaseModel):
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def index(request: Request):
-    """Serve the HTML frontend."""
-    return templates.TemplateResponse("index.html", {"request": request})
+async def index():
+    """Serve the HTML frontend directly from disk."""
+    return FileResponse("templates/index.html")
 
 
 @app.get("/health", tags=["Meta"])
