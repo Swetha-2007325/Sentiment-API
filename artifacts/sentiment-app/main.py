@@ -11,6 +11,7 @@ Rate limiting is enforced by SlowAPI.
 Request logs are persisted to a local SQLite database.
 """
 
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -77,7 +78,6 @@ def fetch_logs(limit: int = 50, offset: int = 0) -> list[dict]:
 
 # ─── ML model ──────────────────────────────────────────────────────────────────
 # The model is loaded once at startup and reused across all requests.
-# Using distilbert-base-uncased-finetuned-sst-2-english (fast, ~250 MB).
 sentiment_pipeline = None
 
 
@@ -87,7 +87,6 @@ def load_model():
     sentiment_pipeline = pipeline(
         "sentiment-analysis",
         model="distilbert-base-uncased-finetuned-sst-2-english",
-        # Explicitly set truncation so long texts don't raise an error
         truncation=True,
         max_length=512,
     )
@@ -97,11 +96,9 @@ def load_model():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run startup/shutdown tasks with the modern lifespan context manager."""
-    # Startup: initialise DB + load model
     init_db()
     load_model()
     yield
-    # Shutdown: nothing to clean up for this demo
 
 
 # ─── FastAPI application ───────────────────────────────────────────────────────
@@ -116,11 +113,8 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Serve files from the static/ folder at /static
+# Serve static files from the static/ folder
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Configure Jinja2 to load templates from the templates/ folder
-templates = Jinja2Templates(directory="templates")
 
 
 # ─── Pydantic models ───────────────────────────────────────────────────────────
@@ -136,37 +130,31 @@ class PredictResponse(BaseModel):
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def index(request: Request):
-    """Serve the HTML frontend."""
-    return templates.TemplateResponse("index.html", {"request": request})
+async def index():
+    """Serve the HTML frontend directly from disk (no Jinja2 templating needed)."""
+    return FileResponse("templates/index.html")
 
 
 @app.get("/health", tags=["Meta"])
 async def health():
-    """Lightweight health-check used by Render's health-check pings."""
+    """Lightweight health-check used by Render and Replit."""
     return {"status": "ok", "model_loaded": sentiment_pipeline is not None}
 
 
 @app.post("/predict", response_model=PredictResponse, tags=["Prediction"])
-@limiter.limit("10/minute")          # Allow 10 requests per minute per IP
+@limiter.limit("10/minute")
 async def predict(request: Request, body: PredictRequest):
     """
     Run sentiment analysis on the provided text.
-
-    - **text**: English text (1–5 000 characters)
-
-    Returns the predicted **sentiment** label and model **score**.
+    Returns the predicted sentiment label and model confidence score.
     """
     if sentiment_pipeline is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
 
-    # Run inference — returns a list with one dict, e.g. [{"label": "POSITIVE", "score": 0.99}]
     result = sentiment_pipeline(body.text)[0]
+    sentiment = result["label"]
+    score = round(result["score"], 6)
 
-    sentiment = result["label"]   # "POSITIVE" | "NEGATIVE"
-    score     = round(result["score"], 6)
-
-    # Persist the request to SQLite asynchronously (in-thread for simplicity)
     save_log(input_text=body.text, sentiment=sentiment, score=score)
 
     return PredictResponse(sentiment=sentiment, score=score)
@@ -174,11 +162,14 @@ async def predict(request: Request, body: PredictRequest):
 
 @app.get("/logs", tags=["Meta"])
 async def logs(limit: int = 50, offset: int = 0):
-    """
-    Return recent prediction logs from the SQLite database.
-
-    - **limit**: number of records to return (default 50)
-    - **offset**: pagination offset (default 0)
-    """
+    """Return recent prediction logs from SQLite."""
     rows = fetch_logs(limit=min(limit, 200), offset=offset)
     return {"count": len(rows), "results": rows}
+
+
+# ─── Entry point for local / Replit / Render ──────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    # Read PORT from environment (Replit and Render both inject this)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

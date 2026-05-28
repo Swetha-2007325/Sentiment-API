@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentiment Analyzer</title>
+  <!-- Link the static CSS file served by FastAPI -->
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <div class="card">
+    <h1>Sentiment Analyzer</h1>
+    <p class="subtitle">Powered by Hugging Face Transformers · distilbert-base-uncased-finetuned-sst-2-english</p>
+
+    <form id="sentimentForm">
+      <label for="textInput">Your text</label>
+      <textarea
+        id="textInput"
+        name="text"
+        placeholder="Type or paste any English text here…"
+        required
+      ></textarea>
+
+      <button type="submit" id="submitBtn">Analyze sentiment</button>
+    </form>
+
+    <!-- Spinner shown while the API call is in flight -->
+    <div class="spinner" id="spinner"></div>
+
+    <!-- Result block, hidden until a response arrives -->
+    <div class="result" id="result">
+      <div class="label">Result</div>
+      <div class="sentiment" id="sentimentLabel"></div>
+      <div class="score" id="scoreLabel"></div>
+    </div>
+
+    <!-- Error block -->
+    <div class="error" id="errorBox"></div>
+  </div>
+
+  <footer>
+    POST /predict · GET /logs · GET /health
+  </footer>
+
+  <script>
+    const form        = document.getElementById("sentimentForm");
+    const submitBtn   = document.getElementById("submitBtn");
+    const spinner     = document.getElementById("spinner");
+    const resultBox   = document.getElementById("result");
+    const sentLabel   = document.getElementById("sentimentLabel");
+    const scoreLabel  = document.getElementById("scoreLabel");
+    const errorBox    = document.getElementById("errorBox");
+
+    // Map raw model labels to friendlier display values
+    const labelMap = { POSITIVE: "Positive", NEGATIVE: "Negative", NEUTRAL: "Neutral" };
+    const classMap = { POSITIVE: "positive", NEGATIVE: "negative", NEUTRAL: "neutral" };
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const text = document.getElementById("textInput").value.trim();
+      if (!text) return;
+
+      // Reset UI state
+      resultBox.classList.remove("visible");
+      errorBox.classList.remove("visible");
+      submitBtn.disabled = true;
+      spinner.classList.add("visible");
+
+      try {
+        // POST to the /predict endpoint
+        const response = await fetch("/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          // Surface the detail message returned by FastAPI / SlowAPI
+          throw new Error(data.detail || `HTTP ${response.status}`);
+        }
+
+        // Populate and show the result card
+        const raw = data.sentiment.toUpperCase();
+        sentLabel.textContent  = labelMap[raw] ?? data.sentiment;
+        sentLabel.className     = `sentiment ${classMap[raw] ?? "neutral"}`;
+        scoreLabel.textContent  = `Confidence: ${(data.score * 100).toFixed(1)}%`;
+        resultBox.classList.add("visible");
+
+      } catch (err) {
+        errorBox.textContent = err.message;
+        errorBox.classList.add("visible");
+      } finally {
+        spinner.classList.remove("visible");
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+
+</body>
+</html>

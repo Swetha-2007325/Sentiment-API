@@ -1,0 +1,30 @@
+kind = "web"
+previewPath = "/"
+title = "Sentiment Analyzer"
+version = "1.0.0"
+id = "sentiment-app-001"
+
+[[services]]
+localPort = 8090
+name = "Sentiment App"
+paths = ["/"]
+
+[services.development]
+run = "python main.py"
+
+[services.development.env]
+PORT = "8090"
+
+[services.production]
+
+[services.production.build]
+args = ["pip", "install", "-r", "requirements.txt"]
+
+[services.production.run]
+args = ["python", "main.py"]
+
+[services.production.run.env]
+PORT = "8090"
+
+[services.production.health.startup]
+path = "/health"
