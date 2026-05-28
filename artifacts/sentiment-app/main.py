@@ -76,6 +76,27 @@ def fetch_logs(limit: int = 50, offset: int = 0) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def fetch_stats() -> dict:
+    """Aggregate sentiment counts and total requests from the database."""
+    with sqlite3.connect(DB_PATH) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM request_logs").fetchone()[0]
+        positive = conn.execute(
+            "SELECT COUNT(*) FROM request_logs WHERE sentiment = 'POSITIVE'"
+        ).fetchone()[0]
+        negative = conn.execute(
+            "SELECT COUNT(*) FROM request_logs WHERE sentiment = 'NEGATIVE'"
+        ).fetchone()[0]
+        neutral = conn.execute(
+            "SELECT COUNT(*) FROM request_logs WHERE sentiment = 'NEUTRAL'"
+        ).fetchone()[0]
+    return {
+        "total_requests": total,
+        "positive": positive,
+        "negative": negative,
+        "neutral": neutral,
+    }
+
+
 # ─── ML model ──────────────────────────────────────────────────────────────────
 # The model is loaded once at startup and reused across all requests.
 sentiment_pipeline = None
@@ -119,7 +140,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ─── Pydantic models ───────────────────────────────────────────────────────────
 class PredictRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000, description="Text to analyse")
+    # min_length removed so empty strings reach the endpoint and return {"error": "Text cannot be empty"}
+    text: str = Field(..., max_length=5000, description="Text to analyse")
 
 
 class PredictResponse(BaseModel):
@@ -148,6 +170,11 @@ async def predict(request: Request, body: PredictRequest):
     Run sentiment analysis on the provided text.
     Returns the predicted sentiment label and model confidence score.
     """
+    # Reject blank / whitespace-only input with a clear error message
+    if not body.text.strip():
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=400, content={"error": "Text cannot be empty"})
+
     if sentiment_pipeline is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
 
@@ -158,6 +185,17 @@ async def predict(request: Request, body: PredictRequest):
     save_log(input_text=body.text, sentiment=sentiment, score=score)
 
     return PredictResponse(sentiment=sentiment, score=score)
+
+
+@app.get("/stats", tags=["Meta"])
+async def stats():
+    """
+    Return aggregate usage analytics from the request log.
+
+    Example response:
+        {"total_requests": 142, "positive": 80, "negative": 40, "neutral": 22}
+    """
+    return fetch_stats()
 
 
 @app.get("/logs", tags=["Meta"])
